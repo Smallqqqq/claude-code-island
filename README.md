@@ -1,4 +1,4 @@
-# 灵动岛 (Dynamic Island) for Claude Code · Windows & macOS
+# 灵动岛 (Dynamic Island) for Claude Code · **Windows** & macOS
 
 一个 Claude Code 的 **skill**，在屏幕顶部显示桌面级灵动岛风格的状态胶囊，实时展示 Claude Code 当前工作状态。
 
