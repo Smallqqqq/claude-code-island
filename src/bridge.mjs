@@ -1,0 +1,552 @@
+#!/usr/bin/env node
+// claude-island bridge — called by Claude Code hooks as one-shot processes.
+//
+// Two modes:
+//   1. hook mode:  reads stdin JSON from Claude Code hook system
+//                  (session_id, prompt, tool_name, tool_input, etc.)
+//   2. CLI mode:   traditional subcommands (on, off, status, etc.)
+//
+// Hook data arrives via stdin, NOT command-line arguments. The ${PROMPT}
+// / ${TOOL_NAME} variables in the command string are NOT substituted by
+// Claude Code — they arrive in the stdin JSON payload.
+
+import { connect } from "node:net";
+import { spawn, execSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import { createInterface } from "node:readline";
+import { SOCK } from "./socket-path.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const COMPANION = join(HERE, "companion.mjs");
+const PREF_DIR  = join(homedir(), ".claude");
+const STATE_FILE = join(PREF_DIR, "claude-island-state.json");
+const PREF_FILE  = join(PREF_DIR, "claude-island.json");
+const PID_FILE   = join(PREF_DIR, "claude-island.pid");
+
+// ── Logging ────────────────────────────────────────────────────────────
+function log(msg) { console.error(`[bridge] ${msg}`); }
+
+// ── Scale presets ───────────────────────────────────────────────────────
+const SCALES = ["small", "medium", "large", "xlarge"];
+const DEFAULT_SCALE = "medium";
+function isScale(v) { return typeof v === "string" && SCALES.includes(v); }
+
+// ── State read/write ────────────────────────────────────────────────────
+function readState() {
+  const fallback = {
+    enabled: true, scale: DEFAULT_SCALE, screen: "primary", notchMode: "auto",
+    project: "", inAgent: false, activeToolCount: 0,
+    prompt: "", startedAt: null, frozenElapsed: null,
+  };
+  try {
+    if (!existsSync(STATE_FILE)) return fallback;
+    const data = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+    delete data.sessionId;
+    delete data._sessions;
+    delete data._activeSessionId;
+    return { ...fallback, ...data };
+  } catch (e) { log(`readState failed: ${e.message}`); return fallback; }
+}
+
+function writeState(s) {
+  try {
+    if (!existsSync(PREF_DIR)) mkdirSync(PREF_DIR, { recursive: true });
+    let prev = {};
+    try { prev = JSON.parse(readFileSync(STATE_FILE, "utf8")); } catch {}
+    if (prev && prev._activeSessionId) s._activeSessionId = prev._activeSessionId;
+    writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
+  } catch (e) { log(`writeState failed: ${e.message}`); }
+}
+
+function writePref(state) {
+  try {
+    writeFileSync(PREF_FILE, JSON.stringify({
+      enabled: state.enabled, scale: state.scale,
+      screen: state.screen, notchMode: state.notchMode,
+    }, null, 2));
+  } catch (e) { log(`writePref failed: ${e.message}`); }
+}
+
+// ── Tool name → island status ───────────────────────────────────────────
+function toolToIsland(toolName, input) {
+  if (!input || typeof input !== "object") input = {};
+  // MCP tools: extract last segment (e.g. mcp__db-query__query_mysql → query_mysql)
+  const shortName = toolName.startsWith("mcp__")
+    ? toolName.split("__").pop() || toolName
+    : toolName;
+  switch (toolName) {
+    case "Read":      return { status: "reading",   detail: basename(input.file_path || "") || "file" };
+    case "Edit":      return { status: "editing",   detail: basename(input.file_path || "") || "file" };
+    case "Write":     return { status: "writing",   detail: basename(input.file_path || "") || "file" };
+    case "Bash": case "PowerShell":
+                      return { status: "running",   detail: (input.command || "").split(/\s+/)[0] || "shell" };
+    case "Glob":      return { status: "searching", detail: input.pattern || "files" };
+    case "Grep":      return { status: "searching", detail: input.pattern || "text" };
+    case "Agent":     return { status: "thinking",  detail: input.subagent_type || "sub-agent" };
+    case "WebFetch":  return { status: "reading",   detail: "web" };
+    case "WebSearch": return { status: "searching", detail: "web" };
+    case "AskUserQuestion": return { status: "thinking", detail: "asking" };
+    case "TaskCreate": case "TaskUpdate": case "TaskGet": case "TaskList":
+                      return { status: "thinking",  detail: "task" };
+    default:          return { status: "running",   detail: truncate(shortName, 24) };
+  }
+}
+
+function truncate(s, max) {
+  const clean = String(s || "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  return clean.length > max ? clean.slice(0, max - 1) + "…" : clean;
+}
+
+// ── Socket helpers ──────────────────────────────────────────────────────
+function connectOnce() {
+  return new Promise((resolve) => {
+    const s = connect(SOCK);
+    let settled = false;
+    s.once("connect", () => { settled = true; resolve(s); });
+    s.once("error", (err) => {
+      if (!settled) { settled = true; log(`connectOnce error: ${err.code || err.message}`); resolve(null); }
+    });
+    setTimeout(() => {
+      if (!settled) { settled = true; log("connectOnce timeout"); try { s.destroy(); } catch {} resolve(null); }
+    }, 2000);
+  });
+}
+
+function writeMessage(sock, msg) {
+  if (!sock || sock.destroyed) return;
+  try { sock.write(JSON.stringify(msg) + "\n"); } catch (e) { log(`writeMessage failed: ${e.message}`); }
+}
+
+// ── Companion lifecycle ─────────────────────────────────────────────────
+async function ensureCompanion() {
+  const existing = await connectOnce();
+  if (existing) { existing.end(); return true; }
+  if (!existsSync(COMPANION)) { log("COMPANION not found: " + COMPANION); return false; }
+  log("spawning companion...");
+  const child = spawn(process.execPath, [COMPANION], {
+    detached: true, stdio: "ignore", windowsHide: true,
+  });
+  let spawnError = null;
+  child.on("error", (err) => { spawnError = err; log(`companion spawn error: ${err.message}`); });
+  child.unref();
+  for (let i = 0; i < 40; i++) {
+    if (spawnError) return false;
+    await new Promise((r) => setTimeout(r, 100));
+    const s = await connectOnce();
+    if (s) { s.end(); log("companion ready after " + ((i + 1) * 100) + "ms"); return true; }
+  }
+  log("companion did not start within 4s");
+  return false;
+}
+
+async function forceKillCompanion() {
+  log("force killing companion...");
+  let killed = false;
+  try {
+    if (existsSync(PID_FILE)) {
+      const pid = parseInt(readFileSync(PID_FILE, "utf8").trim(), 10);
+      if (Number.isFinite(pid) && pid > 0) {
+        if (process.platform === "win32") {
+          execSync(`taskkill /F /PID ${pid}`, { timeout: 2000, stdio: "pipe", windowsHide: true });
+        } else {
+          execSync(`kill -9 ${pid}`, { timeout: 2000, stdio: "pipe" });
+        }
+        killed = true;
+        log(`killed companion pid=${pid}`);
+      }
+    }
+  } catch (e) { log(`PID kill failed: ${e.message}`); }
+  if (!killed) {
+    try {
+      if (process.platform === "win32") {
+        execSync('taskkill /F /IM node.exe /FI "COMMANDLINE eq *companion.mjs*"', { timeout: 3000, stdio: "pipe", windowsHide: true });
+      } else {
+        execSync("pkill -f 'claude-island.*companion.mjs'", { timeout: 3000, stdio: "pipe" });
+      }
+    } catch (e) { log(`pattern kill: ${e.message}`); }
+  }
+  try { if (existsSync(PID_FILE)) unlinkSync(PID_FILE); } catch {}
+  if (process.platform !== "win32") {
+    try { if (existsSync(SOCK)) unlinkSync(SOCK); } catch (e) { log(`unlink SOCK: ${e.message}`); }
+  }
+  await new Promise((r) => setTimeout(r, 500));
+}
+
+// ── Send helpers ────────────────────────────────────────────────────────
+async function sendToCompanion(msg) {
+  const sock = await connectOnce();
+  if (!sock) {
+    if (!(await ensureCompanion())) return false;
+    const s2 = await connectOnce();
+    if (!s2) return false;
+    writeMessage(s2, msg);
+    s2.end();
+    return true;
+  }
+  writeMessage(sock, msg);
+  sock.end();
+  return true;
+}
+
+// ── Per-session data (avoids cross-session pollution) ──────────────────
+function getSessionData(sessionId) {
+  try {
+    if (!existsSync(STATE_FILE)) return {};
+    const data = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+    if (!data || !data._sessionData) return {};
+    return data._sessionData[sessionId] || {};
+  } catch { return {}; }
+}
+
+function saveSessionData(sessionId, fields) {
+  try {
+    const data = existsSync(STATE_FILE)
+      ? JSON.parse(readFileSync(STATE_FILE, "utf8")) : {};
+    if (!data || typeof data !== "object") return;
+    if (!data._sessionData) data._sessionData = {};
+    if (!data._sessionData[sessionId]) data._sessionData[sessionId] = {};
+    Object.assign(data._sessionData[sessionId], fields);
+    // Prune stale sessions (> 10 min inactive)
+    const now = Date.now();
+    for (const [id, s] of Object.entries(data._sessionData)) {
+      if (s && s.lastActivity && (now - s.lastActivity) > 600000) {
+        delete data._sessionData[id];
+      }
+    }
+    writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
+  } catch {}
+}
+
+// ── Hook mode: read stdin JSON, dispatch by hook_event_name ─────────────
+async function handleHook(json) {
+  const event = json.hook_event_name;
+  const sessionId = json.session_id || "unknown";
+  const cwd = json.cwd || process.cwd();
+  const state = readState(); // global prefs only (enabled, scale, etc.)
+  const sess = getSessionData(sessionId);
+
+  log(`hook event=${event} session=${sessionId} cwd=${cwd}`);
+
+  // Project from cwd (per-session to avoid cross-contamination)
+  const project = basename(cwd) || "claude";
+  sess.project = project;
+  sess.lastActivity = Date.now();
+
+  switch (event) {
+    case "UserPromptSubmit": {
+      sess.prompt = truncate(json.prompt || "", 48);
+      sess.inAgent = true;
+      sess.activeToolCount = 0;
+      sess.startedAt = Date.now();
+      sess.frozenElapsed = null;
+      saveSessionData(sessionId, sess);
+      log(`prompt="${sess.prompt}" project="${project}"`);
+      await sendToCompanion({
+        id: sessionId, type: "update",
+        project, status: "thinking", detail: "",
+        prompt: sess.prompt, startedAt: sess.startedAt, frozenElapsed: null,
+      });
+      break;
+    }
+
+    case "PreToolUse": {
+      const toolName = json.tool_name || "";
+      const toolInput = json.tool_input || {};
+      const toolUseId = json.tool_use_id || "";
+      sess.activeToolCount = (sess.activeToolCount || 0) + 1;
+      if (!sess.inAgent) {
+        sess.inAgent = true;
+        sess.startedAt = Date.now();
+      }
+      sess._lastToolId = toolUseId;
+      saveSessionData(sessionId, sess);
+      const upd = toolToIsland(toolName, toolInput);
+      await sendToCompanion({
+        id: sessionId, type: "update",
+        project, status: upd.status, detail: upd.detail,
+        prompt: sess.prompt || "", startedAt: sess.startedAt, frozenElapsed: null,
+      });
+      break;
+    }
+
+    case "PostToolUse": {
+      const toolName = json.tool_name || "";
+      const durationMs = json.duration_ms;
+      sess.activeToolCount = Math.max(0, (sess.activeToolCount || 1) - 1);
+      const isError = !!(json.tool_response && json.tool_response.isError);
+      saveSessionData(sessionId, sess);
+      if (isError) {
+        await sendToCompanion({
+          id: sessionId, type: "update",
+          project, status: "error", detail: toolName,
+          prompt: sess.prompt || "", startedAt: sess.startedAt, frozenElapsed: null,
+        });
+      } else if (sess.activeToolCount === 0 && sess.inAgent) {
+        await sendToCompanion({
+          id: sessionId, type: "update",
+          project, status: "thinking", detail: "",
+          prompt: sess.prompt || "", startedAt: sess.startedAt, frozenElapsed: null,
+        });
+      }
+      break;
+    }
+
+    case "PermissionRequest": {
+      const toolName = json.tool_name || "";
+      saveSessionData(sessionId, sess);
+      await sendToCompanion({
+        id: sessionId, type: "update",
+        project, status: "waiting", detail: toolName,
+        prompt: sess.prompt || "", startedAt: sess.startedAt, frozenElapsed: null,
+      });
+      break;
+    }
+
+    case "Stop": {
+      sess.inAgent = false;
+      if (sess.startedAt != null) sess.frozenElapsed = Date.now() - sess.startedAt;
+      saveSessionData(sessionId, sess);
+      await sendToCompanion({
+        id: sessionId, type: "update",
+        project, status: "done", detail: "",
+        prompt: sess.prompt || "", startedAt: sess.startedAt, frozenElapsed: sess.frozenElapsed,
+      });
+      await sendToCompanion({ id: sessionId, type: "done-retract", delayMs: 30000 });
+      try {
+        if (existsSync(STATE_FILE)) {
+          const data = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+          if (data && data._sessionData && data._sessionData[sessionId]) {
+            delete data._sessionData[sessionId];
+            writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
+          }
+        }
+      } catch {}
+      break;
+    }
+
+    // Ctrl+C / abnormal termination — show interrupted briefly then remove
+    case "StopFailure": {
+      sess.inAgent = false;
+      if (sess.startedAt != null) sess.frozenElapsed = Date.now() - sess.startedAt;
+      saveSessionData(sessionId, sess);
+      await sendToCompanion({
+        id: sessionId, type: "update",
+        project, status: "error", detail: "interrupted",
+        prompt: sess.prompt || "", startedAt: sess.startedAt, frozenElapsed: sess.frozenElapsed,
+      });
+      await sendToCompanion({ id: sessionId, type: "done-retract", delayMs: 30000 });
+      try {
+        if (existsSync(STATE_FILE)) {
+          const data = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+          if (data && data._sessionData && data._sessionData[sessionId]) {
+            delete data._sessionData[sessionId];
+            writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
+          }
+        }
+      } catch {}
+      break;
+    }
+
+    default: {
+      log(`unhandled hook event: ${event}`);
+    }
+  }
+}
+
+// ── Read all of stdin ───────────────────────────────────────────────────
+function readStdin() {
+  return new Promise((resolve) => {
+    if (process.stdin.isTTY) { resolve(""); return; }
+    let data = "";
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(data); } };
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => { data += chunk; });
+    process.stdin.on("end", done);
+    // Safety timeout — 5s should be ample for hook JSON (typically < 1KB)
+    setTimeout(() => { if (data) done(); else { settled = true; resolve(""); } }, 5000);
+  });
+}
+
+// ── CLI mode: traditional subcommands ───────────────────────────────────
+async function handleCli(cmd, args, state) {
+  // Resolve session ID for CLI mode (manual invocations)
+  const cliSessionId = process.env.CLAUDE_CODE_SESSION_ID
+    || randomUUID().slice(0, 8);
+
+  switch (cmd) {
+    // ── Visibility ──────────────────────────────────────────────────
+    case "on": case "enable": {
+      state.enabled = true;
+      writeState(state); writePref(state);
+      const ok = await ensureCompanion();
+      console.log(ok ? "Island enabled" : "Island enabled (companion start failed — check log)");
+      break;
+    }
+    case "off": case "disable": {
+      state.enabled = false;
+      writeState(state); writePref(state);
+      await sendToCompanion({ id: cliSessionId, type: "remove" });
+      console.log("Island disabled");
+      break;
+    }
+    case "toggle": {
+      state.enabled = !state.enabled;
+      writeState(state); writePref(state);
+      if (state.enabled) {
+        const ok = await ensureCompanion();
+        console.log(ok ? "Island enabled" : "Island enabled (companion start failed — check log)");
+      } else {
+        await sendToCompanion({ id: cliSessionId, type: "remove" });
+        console.log("Island disabled");
+      }
+      break;
+    }
+
+    // ── Scale ───────────────────────────────────────────────────────
+    case "scale": {
+      const next = args[1];
+      if (!next || !isScale(next)) {
+        console.log("Usage: bridge.mjs scale <small|medium|large|xlarge>");
+        console.log("Current: " + state.scale); break;
+      }
+      state.scale = next;
+      writeState(state); writePref(state);
+      await sendToCompanion({ id: "config", type: "scale", scale: next });
+      console.log("Island size → " + next);
+      break;
+    }
+
+    // ── Screen ──────────────────────────────────────────────────────
+    case "screen": {
+      const next = args[1];
+      if (!next) { console.log("Current screen: " + state.screen); break; }
+      state.screen = next;
+      writeState(state); writePref(state);
+      await forceKillCompanion();
+      if (state.enabled) await ensureCompanion();
+      console.log("Island screen → " + next);
+      break;
+    }
+
+    // ── Notch ────────────────────────────────────────────────────────
+    case "notch": {
+      const next = args[1];
+      if (!next || !["auto", "normal", "notch"].includes(next)) {
+        console.log("Usage: bridge.mjs notch <auto|normal|notch>");
+        console.log("Current: " + state.notchMode); break;
+      }
+      state.notchMode = next;
+      writeState(state); writePref(state);
+      await forceKillCompanion();
+      if (state.enabled) await ensureCompanion();
+      console.log("Island notch → " + next);
+      break;
+    }
+
+    // ── Reload ──────────────────────────────────────────────────────
+    case "reload": case "reset": {
+      await forceKillCompanion();
+      if (state.enabled) await ensureCompanion();
+      console.log("Island reloaded");
+      break;
+    }
+
+    // ── Kill ────────────────────────────────────────────────────────
+    case "kill": {
+      await sendToCompanion({ id: cliSessionId, type: "remove" });
+      await forceKillCompanion();
+      console.log("Island killed");
+      break;
+    }
+
+    // ── Status ──────────────────────────────────────────────────────
+    case "status": {
+      console.log(JSON.stringify(state, null, 2));
+      break;
+    }
+
+    // ── Init ─────────────────────────────────────────────────────────
+    case "init": {
+      state.project = args[1] || basename(process.cwd());
+      writeState(state); writePref(state);
+      const ok = await ensureCompanion();
+      console.log(ok
+        ? "Island initialized (project: " + state.project + ")"
+        : "Island init: companion start failed — check ~/.claude/claude-island.log");
+      break;
+    }
+
+    // ── Debug: eval JS in island window ──────────────────────────────
+    case "eval": {
+      const js = args.slice(1).join(" ");
+      if (!js) { console.log("Usage: bridge.mjs eval <javascript>"); break; }
+      const ok = await sendToCompanion({ id: "debug", type: "eval", js });
+      console.log(ok ? "eval sent" : "eval failed");
+      break;
+    }
+
+    default: {
+      console.log("Unknown command: " + cmd + " — try: bridge.mjs help");
+      process.exitCode = 1;
+    }
+  }
+}
+
+// ── Help ────────────────────────────────────────────────────────────────
+function showHelp() {
+  console.log("Claude Island Bridge");
+  console.log("  hook                     Read stdin JSON from CC hook (auto-detected)");
+  console.log("  init [project]           Initialise state + start companion");
+  console.log("  on | off | toggle        Visibility control");
+  console.log("  scale <small|medium|large|xlarge>  Size preset");
+  console.log("  screen <primary|active|N>  Choose display");
+  console.log("  notch <auto|normal|notch> Notch wrap mode (macOS only)");
+  console.log("  reload                   Restart companion");
+  console.log("  kill                     Kill companion");
+  console.log("  status                   Show current state");
+}
+
+// ── Main ────────────────────────────────────────────────────────────────
+async function main() {
+  const args = process.argv.slice(2);
+  const cmd = args[0];
+
+  if (!cmd || cmd === "help") { showHelp(); return; }
+
+  // Hook mode: "hook" subcommand or stdin has data
+  if (cmd === "hook" || (!process.stdin.isTTY && cmd !== "eval")) {
+    const raw = await readStdin();
+    if (raw && raw.trim()) {
+      try {
+        const json = JSON.parse(raw);
+        if (json.hook_event_name) {
+          await handleHook(json);
+          return;
+        }
+      } catch (e) { log(`stdin JSON parse failed: ${e.message}`); }
+    }
+    // If stdin JSON failed but cmd is "hook", bail
+    if (cmd === "hook") {
+      log("hook mode: no valid JSON on stdin");
+      return;
+    }
+    // Otherwise fall through to CLI mode
+  }
+
+  // CLI mode
+  const state = readState();
+  await handleCli(cmd, args, state);
+}
+
+main().catch((e) => {
+  log(`fatal: ${e.message}`);
+  console.error(e);
+  process.exit(1);
+});
