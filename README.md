@@ -9,6 +9,24 @@
 
 当 Claude Code 工作时，屏幕顶部会出现一个半透明的黑色胶囊，显示当前操作状态（如"正在读取文件..."、"执行命令中..."等），操作完成后自动消失。
 
+### 状态一览
+
+| 状态 | 截图 |
+|------|------|
+| **Working** — 思考/分析中，琥珀色 spinner | ![Working](images/01-working.png) |
+| **Reading** — 正在读取文件，蓝色 spinner + 文件路径 | ![Reading](images/02-reading.png) |
+| **Editing** — 正在修改文件，黄色 spinner + 文件路径 | ![Editing](images/03-editing.png) |
+| **Running** — 执行命令，橙色 spinner + 命令内容 | ![Running](images/04-running.png) |
+| **Searching** — 搜索代码，紫色 spinner | ![Searching](images/05-searching.png) |
+| **Done** — 完成，绿色外发光 | ![Done](images/06-done.png) |
+| **等待确认** — 等待用户输入，琥珀色脉冲发光 | ![Waiting](images/07-waiting.png) |
+
+### 多会话并行
+
+多个 Claude Code 实例同时工作时，胶囊会堆叠显示，每行独立追踪各自的状态和耗时：
+
+![Multi-session](images/08-multi-session.png)
+
 ## 安装
 
 将此 skill 目录放置到 `~/.claude/skills/island/`，然后在 Claude Code 中输入：
