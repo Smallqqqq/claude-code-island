@@ -1,15 +1,19 @@
 ---
 name: island
 description: >
-  桌面级灵动岛状态胶囊，在屏幕顶部显示 Claude Code 实时工作状态。
+  配置桌面级灵动岛状态胶囊，在屏幕顶部显示 Claude Code 实时工作状态。
   触发词：/island、灵动岛、island、状态胶囊、dynamic island、屏幕顶部显示。
   支持 on/off/toggle/scale/screen/notch/reload/kill/status/setup 命令。
   当用户提到灵动岛相关操作（初始化、开启、关闭、调整大小、重启、设置、状态查看）时使用此 skill。
 ---
 
+![灵动岛多会话截图](screenshots/08-multi-session.png)
+![任务完成状态](screenshots/06-done.png)
+![等待用户确认](screenshots/07-waiting.png)
+
 # 灵动岛 (Dynamic Island) for Claude Code
 
-一个桌面级灵动岛风格的状态胶囊，固定在屏幕顶部，实时显示 Claude Code 当前正在做什么。
+配置一个电脑桌面级灵动岛风格的状态胶囊，固定在屏幕顶部，实时显示 Claude Code 当前正在做什么，并支持跳转对应窗口
 
 - **macOS**: 利用 MacBook 刘海区域，原生 Cocoa + WKWebView
 - **Windows**: 屏幕顶部居中胶囊，WinForms + WebView2
@@ -161,9 +165,18 @@ node -e "const s=require(process.env.HOME+'/.claude/settings.json'); for(const [
 > ✅ 灵动岛配置完成！
 > - 状态：运行中
 > - 已配置 7 个 hook：SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, StopFailure, PermissionRequest
-> - 重启电脑后打开 Claude Code 会自动恢复
+> -  支持开机自启
 >
-> 常用命令：`/island on|off|toggle|reload|status|kill`
+> 常用命令：
+> - `/island on` — 显示灵动岛
+> - `/island off` — 隐藏灵动岛
+> - `/island toggle` — 切换显示/隐藏
+> - `/island scale <small|medium|large|xlarge>` — 调整大小
+> - `/island screen <primary|active|all|1|2>` — 选择屏幕
+> - `/island theme <dark|pink|auto>` — 切换主题
+> - `/island reload` — 重启灵动岛
+> - `/island status` — 查看状态
+> - `/island kill` — 完全关闭
 
 ### 1. /island on — 显示灵动岛
 
@@ -193,7 +206,7 @@ node ~/.claude/skills/island/src/bridge.mjs scale <size>
 
 ### 5. /island screen <value> — 选择屏幕
 
-可选值: `primary`（主屏幕）、`active`（鼠标所在屏幕）、`1`、`2`、`3`...（指定第N个屏幕）
+可选值: `primary`（主屏幕）、`active`（鼠标所在屏幕）、`all`（所有屏幕各显示一个胶囊）、`1`、`2`、`3`...（指定第N个屏幕）
 
 ```bash
 node ~/.claude/skills/island/src/bridge.mjs screen <value>
@@ -207,7 +220,17 @@ node ~/.claude/skills/island/src/bridge.mjs screen <value>
 node ~/.claude/skills/island/src/bridge.mjs notch <mode>
 ```
 
-### 7. /island reload — 重启灵动岛
+### 7. /island theme <theme> — 切换主题
+
+可选值: `dark`（原始黑色/默认）、`pink`（马卡龙粉）、`auto`（跟随系统 light/dark 模式）
+
+```bash
+node ~/.claude/skills/island/src/bridge.mjs theme <theme>
+```
+
+主题偏好会持久化到 `~/.claude/claude-island.json`，重启后自动恢复。
+
+### 8. /island reload — 重启灵动岛
 
 强制杀掉 companion 并重新启动（状态重置）:
 
@@ -215,13 +238,13 @@ node ~/.claude/skills/island/src/bridge.mjs notch <mode>
 node ~/.claude/skills/island/src/bridge.mjs reload
 ```
 
-### 8. /island kill — 完全关闭
+### 9. /island kill — 完全关闭
 
 ```bash
 node ~/.claude/skills/island/src/bridge.mjs kill
 ```
 
-### 9. /island status — 查看状态
+### 10. /island status — 查看状态
 
 ```bash
 node ~/.claude/skills/island/src/bridge.mjs status
@@ -275,6 +298,10 @@ node ~/.claude/skills/island/src/bridge.mjs status
 - **永久常驻**: companion 不会自动退出，灵动岛窗口在屏幕顶部持续显示。关闭需用 `/island kill`。
 - **重启恢复**: 电脑重启后，下次打开 Claude Code 时 SessionStart hook 自动启动灵动岛，无需手动操作。
 - **日志文件**: 位于 `~/.claude/claude-island.log`，最大 256KB，自动轮转。
-- **偏好设置**: `~/.claude/claude-island.json`（enabled, scale, screen, notchMode）
+- **偏好设置**: `~/.claude/claude-island.json`（enabled, scale, screen, notchMode, theme）
 - **会话状态**: `~/.claude/claude-island-state.json`（`_sessionData` 按 session_id 隔离各会话）
 - **PID 文件**: `~/.claude/claude-island.pid`（用于精确进程管理）
+- **聚焦按钮**: 鼠标悬停在灵动岛上时，每行左侧出现 ↗ 圆形按钮，点击可聚焦到对应 session 的终端窗口。支持 WezTerm、Windows Terminal、PowerShell、CMD、Git Bash、VSCode 终端。
+- **主题切换**: 支持 dark（默认黑色）、pink（马卡龙粉）、auto（跟随系统）三种主题，通过 `/island theme` 切换。
+
+当灵动岛需要更新时，应当在一次命令中杀掉已有的灵动岛进程并进行更新，避免多次命令间hook重启旧灵动岛程序。

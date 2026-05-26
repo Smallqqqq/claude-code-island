@@ -8,7 +8,21 @@ export function buildIslandHTML() {
 <head>
 <meta charset="utf-8">
 <style>
-:root { --scale: 1; }
+:root {
+  --scale: 1;
+  --row-bg: #000;
+  --row-text: #fff;
+  --project-color: rgba(255,255,255,0.96);
+  --sep-color: rgba(255,255,255,0.28);
+  --status-color: rgba(255,255,255,0.92);
+  --detail-color: rgba(255,255,255,0.62);
+  --prompt-color: rgba(255,255,255,0.82);
+  --meta-color: rgba(255,255,255,0.55);
+  --meta-border: rgba(255,255,255,0.12);
+  --row-border: rgba(255,255,255,0.18);
+  --ctx-warn: #F59E0B;
+  --ctx-hot: #EF4444;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
   width: 100%; height: 100%;
@@ -27,8 +41,8 @@ html, body {
 }
 
 .row {
-  background: #F2C4CD;
-  color: #4A1428;
+  background: var(--row-bg);
+  color: var(--row-text);
   border-radius: 0;
   width: calc(460px * var(--scale));
   height: calc(34px * var(--scale));
@@ -43,8 +57,8 @@ html, body {
               max-height 320ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .row.visible { opacity: 1; max-height: calc(34px * var(--scale)); }
-.row.visible + .row.visible { border-top: 1px solid rgba(75,20,40,0.12); }
-.row.visible:last-of-type {
+.row-wrap + .row-wrap .row.visible { border-top: 1px solid var(--row-border); }
+.row-wrap:last-child .row.visible {
   border-radius: 0 0 calc(22px * var(--scale)) calc(22px * var(--scale));
 }
 
@@ -69,17 +83,17 @@ body.notch-mode .row:first-child .t-sub { display: none; }
   flex-shrink: 0; display: inline-block;
 }
 
-.project { color: #3A0E1E; font-weight: 600; letter-spacing: -0.1px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sep    { color: rgba(75,20,40,0.35); flex-shrink: 0; }
-.status { color: #5A1830; flex-shrink: 0; }
+.project { color: var(--project-color); font-weight: 600; letter-spacing: -0.1px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sep    { color: var(--sep-color); flex-shrink: 0; }
+.status { color: var(--status-color); flex-shrink: 0; }
 .detail {
-  color: rgba(75,20,40,0.68);
+  color: var(--detail-color);
   font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
   font-size: calc(10.5px * var(--scale));
   overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%;
 }
 .prompt {
-  color: rgba(75,20,40,0.72); font-style: italic; font-weight: 400;
+  color: var(--prompt-color); font-style: italic; font-weight: 400;
   overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%;
 }
 .prompt::before { content: '\\201C'; opacity: 0.5; margin-right: 1px; }
@@ -87,20 +101,82 @@ body.notch-mode .row:first-child .t-sub { display: none; }
 
 .meta {
   padding-left: calc(8px * var(--scale));
-  border-left: 1px solid rgba(75,20,40,0.15);
-  color: rgba(75,20,40,0.55);
+  border-left: 1px solid var(--meta-border);
+  color: var(--meta-color);
   font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
   font-size: calc(10px * var(--scale));
   display: flex; gap: calc(6px * var(--scale)); align-items: center; flex-shrink: 0;
 }
 .meta .mono { font-variant-numeric: tabular-nums; }
-.ctx-warn { color: #A06200; }
-.ctx-hot  { color: #B02828; }
+.ctx-warn { color: var(--ctx-warn); }
+.ctx-hot  { color: var(--ctx-hot); }
+
+/* ── Dark theme animations (default) ─────────────────────────────── */
 @keyframes pulse-waiting {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+@keyframes glow-waiting {
+  0%, 100% {
+    box-shadow: inset 0 0 8px rgba(245, 158, 11, 0.35);
+    background: #1c1c00;
+  }
+  50% {
+    box-shadow: inset 0 0 22px rgba(245, 158, 11, 0.75);
+    background: #3d2e00;
+  }
+}
+@keyframes glow-done {
+  0%, 100% {
+    box-shadow: inset 0 0 8px rgba(34, 197, 94, 0.35);
+    background: #001a0a;
+  }
+  50% {
+    box-shadow: inset 0 0 22px rgba(34, 197, 94, 0.75);
+    background: #003318;
+  }
+}
+
+.row[data-status="waiting"] {
+  animation-name: glow-waiting;
+  animation-duration: 0.9s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+.row[data-status="waiting"] .braille {
+  animation: pulse-waiting 0.9s ease-in-out infinite;
+}
+.row[data-status="done"] {
+  animation-name: glow-done;
+  animation-duration: 1.5s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+.row[data-status="done"] .braille {
+  animation: pulse-waiting 1.5s ease-in-out infinite;
+}
+
+/* ── Pink theme ──────────────────────────────────────────────────── */
+body.theme-pink {
+  --row-bg: #F2C4CD;
+  --row-text: #4A1428;
+  --project-color: #3A0E1E;
+  --sep-color: rgba(75,20,40,0.35);
+  --status-color: #5A1830;
+  --detail-color: rgba(75,20,40,0.68);
+  --prompt-color: rgba(75,20,40,0.72);
+  --meta-color: rgba(75,20,40,0.55);
+  --meta-border: rgba(75,20,40,0.15);
+  --row-border: rgba(75,20,40,0.12);
+  --ctx-warn: #A06200;
+  --ctx-hot: #B02828;
+}
+
+@keyframes pulse-waiting-pink {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.15; transform: scale(1.35); }
 }
-@keyframes glow-waiting {
+@keyframes glow-waiting-pink {
   0%, 100% {
     box-shadow: 0 0 12px rgba(175, 65, 100, 0.5), 0 0 30px rgba(175, 65, 100, 0.2);
     background: #F2C4CD;
@@ -110,13 +186,7 @@ body.notch-mode .row:first-child .t-sub { display: none; }
     background: #E8AABA;
   }
 }
-.row[data-status="waiting"] {
-  animation: glow-waiting 0.9s ease-in-out infinite;
-}
-.row[data-status="waiting"] .braille {
-  animation: pulse-waiting 0.9s ease-in-out infinite;
-}
-@keyframes glow-done {
+@keyframes glow-done-pink {
   0%, 100% {
     box-shadow: 0 0 10px rgba(38, 155, 85, 0.45), 0 0 26px rgba(38, 155, 85, 0.18);
     background: #F2C4CD;
@@ -126,15 +196,81 @@ body.notch-mode .row:first-child .t-sub { display: none; }
     background: #D5E8DD;
   }
 }
-.row[data-status="done"] {
-  animation: glow-done 1.5s ease-in-out infinite;
+
+body.theme-pink .row[data-status="waiting"] {
+  animation-name: glow-waiting-pink;
 }
-.row[data-status="done"] .braille {
-  animation: pulse-waiting 1.5s ease-in-out infinite;
+body.theme-pink .row[data-status="waiting"] .braille {
+  animation-name: pulse-waiting-pink;
+}
+body.theme-pink .row[data-status="done"] {
+  animation-name: glow-done-pink;
+}
+body.theme-pink .row[data-status="done"] .braille {
+  animation-name: pulse-waiting-pink;
 }
 
-#stack { opacity: 1; transition: opacity 280ms ease; }
-body.island-hover #stack { opacity: 0.06; transition: opacity 200ms ease; }
+/* ── Auto theme: follow system preference ────────────────────────── */
+@media (prefers-color-scheme: light) {
+  body.theme-auto {
+    --row-bg: #F2C4CD;
+    --row-text: #4A1428;
+    --project-color: #3A0E1E;
+    --sep-color: rgba(75,20,40,0.35);
+    --status-color: #5A1830;
+    --detail-color: rgba(75,20,40,0.68);
+    --prompt-color: rgba(75,20,40,0.72);
+    --meta-color: rgba(75,20,40,0.55);
+    --meta-border: rgba(75,20,40,0.15);
+    --row-border: rgba(75,20,40,0.12);
+    --ctx-warn: #A06200;
+    --ctx-hot: #B02828;
+  }
+  body.theme-auto .row[data-status="waiting"] {
+    animation-name: glow-waiting-pink;
+  }
+  body.theme-auto .row[data-status="waiting"] .braille {
+    animation-name: pulse-waiting-pink;
+  }
+  body.theme-auto .row[data-status="done"] {
+    animation-name: glow-done-pink;
+  }
+  body.theme-auto .row[data-status="done"] .braille {
+    animation-name: pulse-waiting-pink;
+  }
+}
+
+/* ── Row wrapper (button lives here, outside the clipping row) ──── */
+.row-wrap {
+  position: relative;
+  width: calc(460px * var(--scale));
+}
+
+#stack { opacity: 1; }
+body.island-hover .row { opacity: 0.06; transition: opacity 200ms ease; }
+
+/* ── Focus button ────────────────────────────────────────────────── */
+.focus-btn {
+  position: absolute;
+  left: calc(-46px * var(--scale));
+  top: calc(5px * var(--scale));
+  width: calc(24px * var(--scale));
+  height: calc(24px * var(--scale));
+  border-radius: 50%;
+  background: rgba(30,30,30,0.55);
+  border: 1px solid rgba(255,255,255,0.45); box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+  opacity: 0; transition: opacity 180ms ease, background 150ms ease, box-shadow 150ms ease;
+  cursor: pointer;
+  font-size: calc(11px * var(--scale)); color: rgba(255,255,255,0.9); font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
+body.island-hover .focus-btn { opacity: 1; pointer-events: auto; }
+.focus-btn:hover { background: rgba(50,50,50,0.75); border-color: rgba(255,255,255,0.7); box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+
+body.theme-pink .focus-btn { background: rgba(50,18,30,0.55); border-color: rgba(255,200,210,0.5); color: rgba(255,220,230,0.92); box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+body.theme-pink .focus-btn:hover { background: rgba(70,25,40,0.75); border-color: rgba(255,200,210,0.75); box-shadow: 0 2px 8px rgba(0,0,0,0.45); }
 </style>
 </head>
 <body>
@@ -143,16 +279,44 @@ body.island-hover #stack { opacity: 0.06; transition: opacity 200ms ease; }
 (function () {
   var stack = document.getElementById('stack');
   var STATUS = {
-    thinking:  { color: '#B84068', label: 'Working',    spin: true  },
-    reading:   { color: '#4060B8', label: 'Reading',    spin: true  },
-    editing:   { color: '#A87800', label: 'Editing',    spin: true  },
-    writing:   { color: '#A87800', label: 'Writing',    spin: true  },
-    running:   { color: '#B84040', label: 'Running',    spin: true  },
-    searching: { color: '#7048B0', label: 'Searching',  spin: true  },
-    done:      { color: '#289858', label: 'Done',       spin: false },
-    error:     { color: '#C03040', label: 'Error',      spin: false },
-    waiting:   { color: '#B84068', label: '等待确认',   spin: true  },
+    thinking:  { color: '#F59E0B', label: 'Working',    spin: true  },
+    reading:   { color: '#3B82F6', label: 'Reading',    spin: true  },
+    editing:   { color: '#FACC15', label: 'Editing',    spin: true  },
+    writing:   { color: '#FACC15', label: 'Writing',    spin: true  },
+    running:   { color: '#F97316', label: 'Running',    spin: true  },
+    searching: { color: '#8B5CF6', label: 'Searching',  spin: true  },
+    done:      { color: '#22C55E', label: 'Done',       spin: false },
+    error:     { color: '#EF4444', label: 'Error',      spin: false },
+    waiting:   { color: '#F59E0B', label: '等待确认',   spin: true  },
   };
+
+  var THEMES = {
+    dark: {
+      thinking:  { color: '#F59E0B', label: 'Working',    spin: true  },
+      reading:   { color: '#3B82F6', label: 'Reading',    spin: true  },
+      editing:   { color: '#FACC15', label: 'Editing',    spin: true  },
+      writing:   { color: '#FACC15', label: 'Writing',    spin: true  },
+      running:   { color: '#F97316', label: 'Running',    spin: true  },
+      searching: { color: '#8B5CF6', label: 'Searching',  spin: true  },
+      done:      { color: '#22C55E', label: 'Done',       spin: false },
+      error:     { color: '#EF4444', label: 'Error',      spin: false },
+      waiting:   { color: '#F59E0B', label: '等待确认',   spin: true  },
+    },
+    pink: {
+      thinking:  { color: '#B84068', label: 'Working',    spin: true  },
+      reading:   { color: '#4060B8', label: 'Reading',    spin: true  },
+      editing:   { color: '#A87800', label: 'Editing',    spin: true  },
+      writing:   { color: '#A87800', label: 'Writing',    spin: true  },
+      running:   { color: '#B84040', label: 'Running',    spin: true  },
+      searching: { color: '#7048B0', label: 'Searching',  spin: true  },
+      done:      { color: '#289858', label: 'Done',       spin: false },
+      error:     { color: '#C03040', label: 'Error',      spin: false },
+      waiting:   { color: '#B84068', label: '等待确认',   spin: true  },
+    },
+  };
+  // auto defaults to dark; will be updated if system prefers light
+  THEMES.auto = THEMES.dark;
+
   var BRAILLE = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
   var brailleIdx = 0;
   var rows = {}; var order = [];
@@ -189,7 +353,7 @@ body.island-hover #stack { opacity: 0.06; transition: opacity 200ms ease; }
         var nodes = document.querySelectorAll('.braille');
         for (var i=0;i<nodes.length;i++) {
           var rowEl = nodes[i].closest('.row');
-          if (rowEl && rowEl.dataset.spin==='true') nodes[i].textContent = BRAILLE[brailleIdx];
+          if (rowEl && rowEl.dataset.spin=='true') nodes[i].textContent = BRAILLE[brailleIdx];
         }
         if (!anySpinning()) { clearInterval(tickerB); tickerB=null; }
       }, 80);
@@ -232,12 +396,20 @@ body.island-hover #stack { opacity: 0.06; transition: opacity 200ms ease; }
     var existing = rows[id];
     if (existing && !existing.removing) {
       existing.data = Object.assign({}, existing.data, data);
+      // Update ppid on existing button — prefer termPid (terminal PID) over
+      // termPpid (bridge parent PID, which may be a short-lived hook shell).
+      var eb = existing.wrap.querySelector('.focus-btn');
+      if (eb && (data.termPid != null || data.termPpid != null)) eb.setAttribute('data-ppid', data.termPid || data.termPpid || '');
       renderRowContent(existing); startTickers(); return;
     }
+    var wrap = document.createElement('div'); wrap.className = 'row-wrap';
+    var btn = document.createElement('button'); btn.className = 'focus-btn'; btn.setAttribute('data-id', id); btn.setAttribute('data-ppid', data.termPid || data.termPpid || ''); btn.textContent = '↗';
     var el = document.createElement('div'); el.className = 'row'; el.setAttribute('data-id', id);
-    var row = { id: id, data: Object.assign({}, data), el: el, removing: false };
+    wrap.appendChild(btn);
+    wrap.appendChild(el);
+    var row = { id: id, data: Object.assign({}, data), el: el, wrap: wrap, removing: false };
     if (!row.data.startedAt) row.data.startedAt = Date.now();
-    rows[id] = row; order.push(id); stack.appendChild(el);
+    rows[id] = row; order.push(id); stack.appendChild(wrap);
     renderRowContent(row);
     requestAnimationFrame(function () { requestAnimationFrame(function () { el.classList.add('visible'); }); });
     startTickers();
@@ -246,13 +418,46 @@ body.island-hover #stack { opacity: 0.06; transition: opacity 200ms ease; }
   function removeRow(id) {
     var row = rows[id]; if (!row||row.removing) return;
     row.removing = true; row.el.classList.remove('visible');
-    setTimeout(function () { if (row.el.parentNode) row.el.parentNode.removeChild(row.el); delete rows[id]; var i=order.indexOf(id); if(i>=0)order.splice(i,1); }, 340);
+    setTimeout(function () { if (row.wrap.parentNode) row.wrap.parentNode.removeChild(row.wrap); delete rows[id]; var i=order.indexOf(id); if(i>=0)order.splice(i,1); }, 340);
   }
 
   function setMode(mode) { document.body.classList.toggle('notch-mode', mode === 'notch'); }
   function setScale(scale) { var factor=SCALES[scale]; if(factor==null)factor=SCALES.medium; document.documentElement.style.setProperty('--scale',String(factor)); }
 
-  window.island = { upsertRow:upsertRow, removeRow:removeRow, setMode:setMode, setScale:setScale };
+  function setTheme(theme) {
+    document.body.classList.remove('theme-dark', 'theme-pink', 'theme-auto');
+    document.body.classList.add('theme-' + theme);
+    var t = THEMES[theme] || THEMES.dark;
+    if (t) Object.assign(STATUS, t);
+    // Re-render all rows so status colors update
+    for (var id in rows) { if (rows[id] && !rows[id].removing) renderRowContent(rows[id]); }
+  }
+
+  // Detect system preference changes for auto theme
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function(e) {
+      if (document.body.classList.contains('theme-auto')) {
+        THEMES.auto = e.matches ? THEMES.pink : THEMES.dark;
+        if (THEMES.auto) Object.assign(STATUS, THEMES.auto);
+        for (var id in rows) { if (rows[id] && !rows[id].removing) renderRowContent(rows[id]); }
+      }
+    });
+  }
+
+  window.island = { upsertRow:upsertRow, removeRow:removeRow, setMode:setMode, setScale:setScale, setTheme:setTheme };
+
+  // Focus button: send session id + ppid so the native host can activate the
+  // terminal window in the same event handler (avoids foreground-lock round-trip).
+  stack.addEventListener('click', function(e) {
+    var btn = e.target.closest('.focus-btn');
+    if (!btn) return;
+    e.stopPropagation();
+    var id = btn.getAttribute('data-id');
+    var ppid = parseInt(btn.getAttribute('data-ppid'), 10) || 0;
+    if (id && window.islandHost) {
+      window.islandHost.send({ type: 'focus-session', id: id, ppid: ppid });
+    }
+  });
 })();
 </script>
 </body>

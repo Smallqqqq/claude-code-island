@@ -24,7 +24,7 @@ function resolveBinary() {
   }
 
   if (process.platform === "win32") {
-    const bin = join(here, "hosts", "windows", "island-host-win.exe");
+    const bin = join(here, "hosts", "windows", "bin", "Release", "net8.0-windows", "win-x64", "publish", "island-host-win.exe");
     if (existsSync(bin)) return bin;
     throw new Error(
       "claude-island: Windows host binary not found.\n" +
@@ -84,6 +84,7 @@ class FixedWindow extends EventEmitter {
   send(js)      { this.#write({ type: "eval", js }); }
   setHTML(html) { this.#write({ type: "html", html: Buffer.from(html).toString("base64") }); }
   resize(w, h)  { this.#write({ type: "resize", width: w, height: h }); }
+  activate(ppid) { this.#write({ type: "activate", ppid }); }
   close()       { this.#write({ type: "close" }); }
 }
 
